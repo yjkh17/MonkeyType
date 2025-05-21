@@ -39,11 +39,6 @@ class TypingTestModel: ObservableObject {
     @Published var lastErrorTime: Date = .distantPast
     private let errorCooldown: TimeInterval = 0.1 // 100ms cooldown for error sounds
     
-    // Add new properties for input handling
-    @Published private(set) var isProcessingInput = false
-    private let inputQueue = DispatchQueue(label: "com.monkeytype.inputProcessing")
-    private var lastProcessedLength = 0
-    
     @Published var currentQuote: Quote? = nil
     
     @Published var wpmHistory: [Double] = []
@@ -119,6 +114,8 @@ class TypingTestModel: ObservableObject {
     private var soundCooldown: TimeInterval = 0.05 // 50ms between sounds
     private var lastSoundTime: Date = .distantPast
     
+    private var testInitiated: Bool = false
+    
     private func playSound(_ type: SoundManager.SoundType) {
         guard settings.soundEnabled else { return }
         
@@ -134,10 +131,10 @@ class TypingTestModel: ObservableObject {
     }
     
     func startTest() {
-        // Cancel any pending debounce
-        debounceTimer?.invalidate()
+        testInitiated = false
+        timer?.invalidate()
+        timer = nil
         
-        // Reset test state
         testState = .active
         isTestActive = true
         currentIndex = 0
@@ -150,68 +147,37 @@ class TypingTestModel: ObservableObject {
         correctChars = 0
         incorrectChars = 0
         startTime = Date()
-        
-        // Reset input state
-        isProcessingInput = false
-        lastProcessedLength = 0
+        elapsedTime = 0
+        lastCalculation = .distantPast
         
         // Reset tracking properties
         lastInputLength = 0
         isBackspacing = false
-        lastWordLength = 0
-        soundThrottle = 0
         allTypedChars = 0
         consecutiveCorrect = 0
         currentWordStart = 0
+        currentWordLength = 0
+        extraChars = 0
         
-        // Reset quote
-        currentQuote = nil
-        
-        // Reset history
-        wpmHistory = []
-        rawWpmHistory = []
-        lastHistoryUpdate = .distantPast
-        
-        // Reset character stats
-        characterStats = [:]
-        mostMissedKeys = []
-        accuracyPerKey = [:]
-        
-        // Reset tracking variables
-        lastPressTime = [:]
-        keyPressTimes = [:]
-        typingSpeed = []
-        errorLocations = []
-        consecutiveErrorRate = 0
-        
-        // Load appropriate content
+        // Load fresh content
         loadContent()
+        currentWordLength = currentWords.first?.count ?? 0
         
-        // Handle test mode specific setup
+        // Set up timer if needed
         switch settings.testMode {
         case .time:
             timeRemaining = selectedDuration.rawValue
-            timer?.invalidate()
             timer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
                 self?.updateTimer()
             }
         case .words:
             targetWordCount = settings.wordCount.rawValue
             timeRemaining = -1
-        case .quote:
-            timeRemaining = -1
-        case .zen:
-            timeRemaining = -1
-        case .custom:
-            timeRemaining = -1
-        case .numbers:
-            timeRemaining = -1
-        case .punctuation:
+        default:
             timeRemaining = -1
         }
         
-        // Clear any existing results notification
-        // Removed notification posting
+        NotificationCenter.default.post(name: .hideResults, object: nil)
     }
     
     private func loadContent() {
@@ -388,6 +354,22 @@ class TypingTestModel: ObservableObject {
         )
     }
     
+    func cancelTest() {
+        guard testState == .active else { return }
+        
+        isTestActive = false
+        testState = .idle
+        timer?.invalidate()
+        timer = nil
+        
+        // Reset test state
+        userInput = ""
+        currentWordIsCorrect = true
+        
+        NotificationCenter.default.post(name: .hideResults, object: nil)
+        NotificationCenter.default.post(name: .testCancelled, object: nil)
+    }
+    
     func restartTest() {
         // Only allow restart if test is finished or idle
         guard testState != .active else { return }
@@ -397,26 +379,6 @@ class TypingTestModel: ObservableObject {
         
         // Start new test
         startTest()
-    }
-    
-    func cancelTest() {
-        guard testState == .active else { return }
-        
-        isTestActive = false
-        testState = .idle
-        timer?.invalidate()
-        timer = nil
-        
-        // Reset input state
-        isProcessingInput = false
-        lastProcessedLength = 0
-        
-        // Reset without saving results
-        userInput = ""
-        currentWordIsCorrect = true
-        
-        NotificationCenter.default.post(name: .hideResults, object: nil)
-        NotificationCenter.default.post(name: .testCancelled, object: nil)
     }
     
     private func calculateStats() {
@@ -500,30 +462,37 @@ class TypingTestModel: ObservableObject {
     }
     
     func handleInput(_ newInput: String) {
-        // Quick validation to avoid unnecessary processing
-        guard testState == .active,
-              !isProcessingInput,
-              newInput.count != lastProcessedLength else { return }
-        
-        isProcessingInput = true
-        lastProcessedLength = newInput.count
-        
-        inputQueue.async { [weak self] in
-            guard let self = self else { return }
-            
-            // Process input on background queue
-            let shouldSubmit = newInput.hasSuffix(" ") || newInput.hasSuffix("\n")
-            
-            DispatchQueue.main.async {
-                self.userInput = newInput
-                self.validateWord()
-                
-                if shouldSubmit {
-                    self.submitWord()
-                }
-                
-                self.isProcessingInput = false
+        // Start test automatically on first keystroke
+        if !isTestActive && testState == .idle && !newInput.isEmpty && !testInitiated {
+            // Don't start test if it's just a space or return
+            if newInput == " " || newInput == "\n" {
+                return
             }
+            testInitiated = true
+            startTest()
+            userInput = newInput
+            validateWord()
+            return
+        }
+        
+        guard isTestActive else { return }
+        
+        let wasBackspacing = isBackspacing
+        isBackspacing = newInput.count < userInput.count
+        
+        userInput = newInput
+        validateWord()
+        
+        // Only submit if:
+        // 1. We weren't backspacing
+        // 2. Have input
+        // 3. Input ends with space/return
+        // 4. Current word is correct
+        if !wasBackspacing && 
+           !newInput.isEmpty && 
+           (newInput.hasSuffix(" ") || newInput.hasSuffix("\n")) &&
+           currentWordIsCorrect {
+            submitWord()
         }
     }
     
@@ -541,7 +510,7 @@ class TypingTestModel: ObservableObject {
         var incorrect = 0
         
         // Track all typed characters including current input
-        allTypedChars = (0..<currentIndex).reduce(0) { sum, idx in
+        allTypedChars = (0..<currentIndex).reduce(0) { sum, idx in 
             sum + currentWords[idx].count + 1 // +1 for space after each word
         } + input.count
         
@@ -564,18 +533,35 @@ class TypingTestModel: ObservableObject {
             }
         }
         
+        // Count extra characters as incorrect
+        if input.count > currentWord.count {
+            incorrect += input.count - currentWord.count
+        }
+        
         correctChars = correct
         incorrectChars = incorrect
         
+        if !isBackspacing {
+            // Smooth word transition
+            if correct == currentWord.count && (input.hasSuffix(" ") || input.hasSuffix("\n")) {
+                submitWord()
+                return
+            }
+            
+            // Auto-complete if only one character is left and all chars so far are correct
+            if correct == input.count && input.count == currentWord.count - 1 && incorrect == 0 {
+                userInput += String(currentWord.last!)
+                submitWord()
+                return
+            }
+        }
+        
         currentWordIsCorrect = input == currentWord
         calculateStats()
-        
-        // Update last processed length after validation
-        lastProcessedLength = userInput.count
     }
     
     func submitWord() {
-        guard isTestActive, !isProcessingInput else { return }
+        guard isTestActive else { return }
         
         let currentWord = currentWords[currentIndex]
         let input = userInput.trimmingCharacters(in: .whitespaces)
@@ -600,7 +586,7 @@ class TypingTestModel: ObservableObject {
             // Reset sound throttle on word completion
             soundThrottle = 0
             
-            if settings.soundEnabled && !isBackspacing {
+            if settings.soundEnabled {
                 playSound(.keypress)
             }
             

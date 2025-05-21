@@ -21,6 +21,7 @@ struct ContentView: View {
     @State private var lineHeight: CGFloat = 0
     @State private var shouldAutoScroll: Bool = true
     @State private var currentResult: TypingTestModel.TestResult?
+    @State private var testStarting = false
 
     init() {
         let settings = Settings()
@@ -109,17 +110,21 @@ struct ContentView: View {
                     Button {
                         withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
                             isResetting = true
+                            if model.isTestActive {
+                                model.cancelTest()
+                            }
                             model.startTest()
+                            focusInput()
                         }
                         DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
                             isResetting = false
                         }
                     } label: {
-                        Text(model.isTestActive ? "reset" : "start test")
+                        Text(model.testState == .active ? "reset" : "start test")
                             .foregroundColor(settings.theme.colors.accent)
                     }
                     .buttonStyle(.plain)
-                    .opacity(model.isTestActive ? 1 : 0)
+                    .opacity(model.testState == .active ? 1 : 0.8)
                     .rotationEffect(.degrees(isResetting ? 360 : 0))
                     
                     Button {
@@ -171,8 +176,14 @@ struct ContentView: View {
                 shouldAutoScroll = true
             }
             .onChange(of: settings.testMode) { _, _ in
-                shouldAutoScroll = true
-                scrollOffset = 0
+                withAnimation(.easeInOut(duration: 0.2)) {
+                    shouldAutoScroll = true
+                    scrollOffset = 0
+                    if model.isTestActive {
+                        model.cancelTest()
+                    }
+                    focusInput()
+                }
             }
             
             Spacer()
@@ -186,37 +197,32 @@ struct ContentView: View {
                 .padding()
                 .background(settings.theme.colors.background.opacity(0.3))
                 .cornerRadius(8)
-                .disabled(!model.isTestActive || model.isProcessingInput)
                 .foregroundColor(settings.theme.colors.text)
-                .opacity(inputFieldOpacity)
+                .opacity(testStarting ? 0.5 : (model.testState == .active ? 1 : 0.5))
                 .focused($isInputFocused)
-                .onChange(of: model.userInput) { _, newValue in
-                    model.handleInput(newValue)
-                    if !model.currentWordIsCorrect {
-                        let now = Date()
-                        if now.timeIntervalSince(lastError) >= 0.5 {
-                            lastError = now
-                            withAnimation(.spring(response: 0.3, dampingFraction: 0.5)) {
-                                showError = true
-                            }
-                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
-                                showError = false
-                            }
-                        }
+                .disabled(!model.isTestActive)
+                .onSubmit {
+                    if !model.userInput.isEmpty {
+                        model.submitWord()
                     }
                 }
-                .onChange(of: model.testState) { _, state in
-                    withAnimation(.easeInOut(duration: 0.2)) {
-                        switch state {
-                        case .active:
-                            focusInput()
-                        case .finished:
-                            isInputFocused = false
-                            inputFieldOpacity = 0
-                        case .idle:
-                            inputFieldOpacity = 1
-                            focusInput()
+                .onChange(of: model.userInput) { _, newValue in
+                    if !model.isTestActive && !testStarting && !newValue.isEmpty {
+                        // Don't start test if it's just a space or return
+                        if newValue == " " || newValue == "\n" {
+                            model.userInput = ""
+                            return
                         }
+                        // Animate test start
+                        withAnimation(.easeInOut(duration: 0.2)) {
+                            testStarting = true
+                        }
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+                            model.handleInput(newValue)
+                            testStarting = false
+                        }
+                    } else if model.isTestActive {
+                        model.handleInput(newValue)
                     }
                 }
             
@@ -272,22 +278,6 @@ struct ContentView: View {
         }
         .background(settings.theme.colors.background)
         .animation(.easeInOut(duration: 0.3), value: settings.theme)
-        .onChange(of: settings.showKeyboard) { _, showing in
-            withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
-                keyboardOffset = showing ? 0 : 200
-            }
-        }
-        .sheet(isPresented: $showingSettings) {
-            SettingsView(settings: settings)
-        }
-        .sheet(isPresented: $showingCustomText) {
-            CustomTextView(settings: settings)
-        }
-        .sheet(isPresented: $showingResults) {
-            if let result = currentResult {
-                ResultsOverlay(result: result, theme: settings.theme)
-            }
-        }
         .onAppear {
             model.loadWords()
             setupNotifications()
@@ -303,6 +293,12 @@ struct ContentView: View {
                 model.cancelTest()
             }
         }
+        .onChange(of: isInputFocused) { _, focused in
+            if !focused && model.isTestActive && !showingSettings && !showingCustomText && !showingResults {
+                // Restore focus if lost during active test
+                focusInput()
+            }
+        }
         .onChange(of: settings.testMode) { _, _ in
             withAnimation(.easeInOut(duration: 0.2)) {
                 shouldAutoScroll = true
@@ -310,6 +306,7 @@ struct ContentView: View {
                 if model.isTestActive {
                     model.cancelTest()
                 }
+                focusInput()
             }
         }
         .onChange(of: settings.language) { _, _ in
@@ -318,14 +315,24 @@ struct ContentView: View {
             }
             model.loadWords()
         }
+        .sheet(isPresented: $showingSettings) {
+            SettingsView(settings: settings)
+        }
+        .sheet(isPresented: $showingCustomText) {
+            CustomTextView(settings: settings)
+        }
+        .sheet(isPresented: $showingResults) {
+            if let result = currentResult {
+                ResultsOverlay(result: result, theme: settings.theme)
+            }
+        }
     }
     
     private func focusInput() {
-        withAnimation {
-            inputFieldOpacity = 1
-        }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-            isInputFocused = true
+        DispatchQueue.main.async {
+            if !self.showingSettings && !self.showingCustomText && !self.showingResults {
+                self.isInputFocused = true
+            }
         }
     }
     
@@ -347,6 +354,20 @@ struct ContentView: View {
             removal: .move(edge: .leading).combined(with: .opacity)
         ))
         .animation(.spring(response: 0.3, dampingFraction: 0.7), value: model.currentIndex)
+        .onChange(of: model.currentWordIsCorrect) { _, isCorrect in
+            if !isCorrect {
+                let now = Date()
+                if now.timeIntervalSince(lastError) >= 0.5 {
+                    lastError = now
+                    withAnimation(.spring(response: 0.3, dampingFraction: 0.5)) {
+                        showError = true
+                    }
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                        showError = false
+                    }
+                }
+            }
+        }
     }
     
     private func wordBackgroundReader(for index: Int) -> some View {
@@ -413,6 +434,8 @@ struct ContentView: View {
                 if let mode = notification.userInfo?["mode"] as? String,
                    let testMode = Settings.TestMode(rawValue: mode) {
                     withAnimation(.easeInOut(duration: 0.2)) {
+                        shouldAutoScroll = true
+                        scrollOffset = 0
                         if model.isTestActive {
                             model.cancelTest()
                         }
@@ -460,13 +483,10 @@ struct ContentView: View {
             }
         
         NotificationCenter.default.addObserver(
-            forName: .testComplete,
+            forName: .testCancelled,
             object: nil,
-            queue: .main) { notification in
-                if let result = notification.userInfo?["result"] as? TypingTestModel.TestResult {
-                    currentResult = result
-                    showingResults = true
-                }
+            queue: .main) { _ in
+                focusInput()
             }
         
         NotificationCenter.default.addObserver(
@@ -475,6 +495,17 @@ struct ContentView: View {
             queue: .main) { _ in
                 showingResults = false
                 currentResult = nil
+                focusInput()
+            }
+        
+        NotificationCenter.default.addObserver(
+            forName: .testComplete,
+            object: nil,
+            queue: .main) { notification in
+                if let result = notification.userInfo?["result"] as? TypingTestModel.TestResult {
+                    currentResult = result
+                    showingResults = true
+                }
             }
     }
 }

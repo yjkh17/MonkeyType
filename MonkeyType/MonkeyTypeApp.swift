@@ -18,10 +18,8 @@ struct MonkeyTypeApp: App {
         .defaultSize(width: defaultWidth, height: defaultHeight)
         .windowResizability(.contentSize)
         .commands {
-            // Remove New Window command
             CommandGroup(replacing: .newItem) { }
             
-            // Add custom commands to app menu
             CommandGroup(after: .appSettings) {
                 Button("Restart Test") {
                     NotificationCenter.default.post(name: .restartTest, object: nil)
@@ -61,32 +59,6 @@ struct MonkeyTypeApp: App {
                     NotificationCenter.default.post(name: .cancelTest, object: nil)
                 }
                 .keyboardShortcut(.escape, modifiers: [])
-            }
-            
-            CommandMenu("View") {
-                Button("Toggle Live WPM") {
-                    NotificationCenter.default.post(name: .toggleLiveWPM, object: nil)
-                }
-                .keyboardShortcut("w", modifiers: .command)
-                
-                Button("Toggle Live Accuracy") {
-                    NotificationCenter.default.post(name: .toggleLiveAccuracy, object: nil)
-                }
-                .keyboardShortcut("a", modifiers: .command)
-                
-                Button("Toggle Keyboard") {
-                    NotificationCenter.default.post(name: .toggleKeyboard, object: nil)
-                }
-                .keyboardShortcut("k", modifiers: .command)
-                
-                Divider()
-                
-                Button("Enter Full Screen") {
-                    if let window = NSApplication.shared.windows.first {
-                        window.toggleFullScreen(nil)
-                    }
-                }
-                .keyboardShortcut("f", modifiers: [.command, .control])
             }
         }
     }

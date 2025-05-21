@@ -1,0 +1,9 @@
+{
+  "name": "english_1k",
+  "noLazyMode": true,
+  "orderedByFrequency": true,
+  "words": [
+    "the", "of", "to", "and", "a", "in", "is", "it", "you", "that",
+    "he", "was", "for", "on", "are", "with", "as", "I", "his", "they"
+  ]
+}

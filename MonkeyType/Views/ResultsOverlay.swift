@@ -12,9 +12,7 @@ struct ResultsOverlay: View {
                 StatItem(title: "wpm", value: String(format: "%.0f", result.wpm), color: theme.colors.text)
                 StatItem(title: "acc", value: String(format: "%.1f%%", result.accuracy), color: theme.colors.text)
                 StatItem(title: "raw", value: String(format: "%.0f", result.rawWpm), color: theme.colors.text)
-                if result.elapsedTime >= 1 {
-                    StatItem(title: "time", value: "\(Int(result.elapsedTime))s", color: theme.colors.text)
-                }
+                StatItem(title: "time", value: "\(Int(result.elapsedTime))s", color: theme.colors.text)
                 StatItem(title: "char", value: "\(result.totalChars)", color: theme.colors.text)
             }
             

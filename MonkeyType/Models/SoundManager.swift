@@ -3,9 +3,9 @@ import AVFoundation
 
 class SoundManager {
     static let shared = SoundManager()
-    private var player: AVAudioPlayer?
+    private var players: [SoundType: AVAudioPlayer?] = [:]
     
-    enum SoundType {
+    enum SoundType: CaseIterable {
         case keypress
         case error
         case complete
@@ -19,14 +19,28 @@ class SoundManager {
         }
     }
     
-    func playSound(_ type: SoundType) {
-        guard let url = Bundle.main.url(forResource: type.filename, withExtension: "wav") else { return }
-        
-        do {
-            player = try AVAudioPlayer(contentsOf: url)
-            player?.play()
-        } catch {
-            print("Failed to play sound: \(error)")
+    func loadSounds() {
+        SoundType.allCases.forEach { type in
+            guard let url = Bundle.main.url(forResource: type.filename, withExtension: "wav") else { return }
+            do {
+                let player = try AVAudioPlayer(contentsOf: url)
+                player.prepareToPlay()
+                players[type] = player
+            } catch {
+                print("Failed to load sound: \(error)")
+            }
         }
+    }
+    
+    func playSound(_ type: SoundType) {
+        guard let player = players[type] ?? nil else { return }
+        player.stop()
+        player.currentTime = 0
+        player.volume = Float(UserDefaults.standard.double(forKey: "soundVolume"))
+        player.play()
+    }
+    
+    private init() {
+        loadSounds()
     }
 }
